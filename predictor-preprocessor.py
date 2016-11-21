@@ -4,6 +4,55 @@ import csv
 import io
 import time
 import json
+import uuid
+
+class PredictorRpcClient(object):
+    def __init__(self):
+        credentials = pika.PlainCredentials('rabbitmq', 'rabbitmq')
+        parameters = pika.ConnectionParameters(
+            host='localhost',
+            credentials=credentials
+        )
+
+        self.connection = pika.BlockingConnection(parameters)
+        self.channel = self.connection.channel()
+        result = self.channel.queue_declare(exclusive=True)
+        self.callback_queue = result.method.queue
+
+        self.channel.basic_consume(
+            self._on_response,
+            no_ack=True,
+            queue=self.callback_queue
+        )
+
+    def _on_response(self, ch, method, props, body):
+        if self.corr_id == props.correlation_id:
+            self.response = body
+
+
+    def call(self, feature_vector):
+        self.response = None
+        self.corr_id = str(uuid.uuid4())
+
+        properties = pika.BasicProperties(
+            reply_to = self.callback_queue,
+            correlation_id = self.corr_id
+        )
+
+        self.channel.basic_publish(
+            exchange='',
+            routing_key='predictor_queue',
+            properties = properties,
+            body=feature_vector
+        )
+
+        while self.response is None:
+            self.connection.process_data_events()
+
+        return str(self.response)
+
+
+
 
 def construct_type_dict(features_csv_bytes):
     features_csv = io.StringIO(features_csv_bytes.decode('utf-8'))
@@ -73,6 +122,9 @@ if __name__ == '__main__':
             time.sleep(1)
 
     type_dict = construct_type_dict(features_csv_bytes)
+
+    if type_dict is None:
+        print('error')
 
     # features_csv = io.StringIO(features_csv_bytes.decode('utf-8'))
     #
