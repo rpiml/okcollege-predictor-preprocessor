@@ -8,13 +8,8 @@ import uuid
 
 class PredictorRpcClient(object):
     def __init__(self):
-        credentials = pika.PlainCredentials('rabbitmq', 'rabbitmq')
-        parameters = pika.ConnectionParameters(
-            host='localhost',
-            credentials=credentials
-        )
 
-        self.connection = pika.BlockingConnection(parameters)
+        self.connection = rabbitmq_connect()
         self.channel = self.connection.channel()
         result = self.channel.queue_declare(exclusive=True)
         self.callback_queue = result.method.queue
@@ -52,7 +47,21 @@ class PredictorRpcClient(object):
         return str(self.response)
 
 
-
+def rabbitmq_connect(user='rabbitmq', password='rabbitmq', host='localhost'):
+        credentials = pika.PlainCredentials(user, password)
+        parameters = pika.ConnectionParameters(
+            host=host,
+            credentials=credentials
+        )
+        print('Attempting RabbitMQ connection...')
+        while True:
+            try:
+                connection = pika.BlockingConnection(parameters)
+                break
+            except Exception as e:
+                print('Could not connect to RabbitMQ. Retrying...')
+                time.sleep(1)
+        return connection
 
 def construct_type_dict(features_csv_bytes):
     features_csv = io.StringIO(features_csv_bytes.decode('utf-8'))
@@ -106,25 +115,59 @@ def construct_feature_vector(survey_response, type_dict):
             response_vector.append((q, None))
     except LookupError:
         print('Malformed survey response provided: %s' % json.dumps(survey_response))
-        return None
+        raise
 
     return json.dumps([str(survey_response[0])] + [v[1] for v in sorted(response_vector, key=lambda x: x[0])])
 
-
-if __name__ == '__main__':
+def on_request(ch, method, props, body):
     r = redis.StrictRedis(host='localhost')
-
+    print('Attempting to fetch survey_features.csv...')
     while True:
         features_csv_bytes = r.get('learning:survey_features.csv')
         if features_csv_bytes is not None:
             break
         else:
+            print('survey_features.csv not found, trying again...')
             time.sleep(1)
 
-    type_dict = construct_type_dict(features_csv_bytes)
+    try:
+        print('Request received: %s' % str(survey_response[0]))
+        survey_response = json.loads(str(body))
+        type_dict = construct_type_dict(features_csv_bytes)
+        feature_vector = construct_feature_vector(survey_response)
 
-    if type_dict is None:
-        print('error')
+        rpc_client = PredictorRpcClient()
+        print('Requesting prediction from predictor...')
+        response = rpc_client.call(feature_vector)
+        print('Response received')
+
+    except:
+        print('Error: bad request %s' % str(body))
+        response = None
+
+    ch.basic_publish(
+        exchange='',
+        routing_key=props.reply_to,
+        properties=pika.BasicProperties(
+            correlation_id=props.correlation_id
+        ),
+        body=str(response)
+    )
+    ch.basic_ack(delivery_tag = method.delivery_tag)
+
+
+
+if __name__ == '__main__':
+
+    connection = rabbitmq_connect()
+    channel = connection.channel()
+    channel.queue_declare(queue='predictor-preprocessor')
+
+    channel.basic_qos(prefetch_count=1)
+    channel.basic_consume(on_request, queue='predictor-preprocessor')
+
+    print("Awaiting RPC requests")
+    channel.start_consuming()
 
     # features_csv = io.StringIO(features_csv_bytes.decode('utf-8'))
     #
