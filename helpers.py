@@ -6,9 +6,18 @@ import time
 import json
 import uuid
 
-class RpcClient(object):
-    def __init__(self, routing_key):
+'''
+Collection of helper functions / classes for use in the predictor-preprocessor
+'''
 
+class RpcClient(object):
+    '''
+    A class to instantiate a client for making remote procedure calls with RabbitMQ
+    '''
+    def __init__(self, routing_key):
+        '''
+        Setup and configure the RabbitMQ connection for RPC
+        '''
         self.connection = rabbitmq_connect()
         self.channel = self.connection.channel()
         result = self.channel.queue_declare(exclusive=True)
@@ -22,11 +31,18 @@ class RpcClient(object):
         )
 
     def _on_response(self, ch, method, props, body):
+        '''
+        Callback to check if the received response belongs to the current request
+        '''
         if self.corr_id == props.correlation_id:
             self.response = body
 
 
     def call(self, body):
+        '''
+        Method to queue a request to the specified routing_key and wait for
+        response to be populated
+        '''
         self.response = None
         self.corr_id = str(uuid.uuid4())
 
@@ -45,29 +61,42 @@ class RpcClient(object):
         while self.response is None:
             self.connection.process_data_events()
 
-        return str(self.response)
+        return self.response.decode('utf-8')
 
     def __del__(self):
         self.connection.close()
 
-
 def rabbitmq_connect(user='rabbitmq', password='rabbitmq', host='localhost'):
-        credentials = pika.PlainCredentials(user, password)
-        parameters = pika.ConnectionParameters(
-            host=host,
-            credentials=credentials
-        )
-        print('Attempting RabbitMQ connection...')
-        while True:
-            try:
-                connection = pika.BlockingConnection(parameters)
-                break
-            except Exception as e:
-                print('Could not connect to RabbitMQ. Retrying...')
-                time.sleep(1)
-        return connection
+    '''
+    Connect to a rabbitmq server and wait for the connection to be established
+    '''
+    credentials = pika.PlainCredentials(user, password)
+    parameters = pika.ConnectionParameters(
+        host=host,
+        credentials=credentials
+    )
+    print('Attempting RabbitMQ connection...')
+    while True:
+        try:
+            connection = pika.BlockingConnection(parameters)
+            break
+        except Exception as e:
+            print('Could not connect to RabbitMQ. Retrying...')
+            time.sleep(1)
+
+    print('RabbitMQ connection established')
+    return connection
 
 def construct_type_dict(features_csv_bytes):
+    '''
+    This function takes:
+        - a csv file (as a byte array) where rows are of the format:
+                    question_id     question_type       categorical_count (if any)
+
+    and returns:
+        - a dictionary of format {question_id : ('numerical' || 'categorical', categorical_count)}
+
+    '''
     features_csv = io.StringIO(features_csv_bytes.decode('utf-8'))
     reader = csv.reader(features_csv, delimiter='\t')
 
@@ -83,10 +112,22 @@ def construct_type_dict(features_csv_bytes):
     return type_dict
 
 def construct_feature_vector(survey_response, type_dict):
+    '''
+    This function takes:
+        - a survey response (as a json object)
+        - a dictionary of format {question_id : ('numerical' || 'categorical', categorical_count)}
+
+    and returns serialized json list where:
+        - every entry corresponds to a feature
+        Note:
+            Multi-choice questions are broken up into a series of categorical
+            questions of count 2 (i.e. booleans)
+
+    '''
     response_vector = []
     seen_questions = set()
     try:
-        for page in survey_response[1]['survey']['pages']:
+        for page in survey_response['survey']['pages']:
             for question in page['questions']:
                 if question['id'] not in type_dict:
                     continue
@@ -121,9 +162,14 @@ def construct_feature_vector(survey_response, type_dict):
         print('Malformed survey response provided: %s' % json.dumps(survey_response))
         raise
 
-    return json.dumps([str(survey_response[0])] + [v[1] for v in sorted(response_vector, key=lambda x: x[0])])
+    return json.dumps([v[1] for v in sorted(response_vector, key=lambda x: x[0])])
 
 def on_request(ch, method, props, body):
+    '''
+    Callback to handle incoming requests to the predictor-preprocessor queue.
+    Hands off preprocessed data to the predictor and returns the response back to
+    the initial requester.
+    '''
     r = redis.StrictRedis(host='localhost')
     print('Attempting to fetch survey_features.csv...')
     while True:
@@ -137,13 +183,11 @@ def on_request(ch, method, props, body):
     print('survey_features.csv fetched')
 
     try:
-        print('Request received: %s' % str(survey_response[0]))
-        print(body.decode('utf-8'))
-        print(type(body))
-        exit(1)
-        survey_response = json.loads(body)
+        survey_response = json.loads(body.decode('utf-8'))
+        print('Request received, parsing...')
+
         type_dict = construct_type_dict(features_csv_bytes)
-        feature_vector = construct_feature_vector(survey_response)
+        feature_vector = construct_feature_vector(survey_response, type_dict)
 
         rpc_client = RpcClient('predictor_queue')
         print('Requesting prediction from predictor...')

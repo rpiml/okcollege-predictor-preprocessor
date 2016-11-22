@@ -1,5 +1,10 @@
 import helpers
 
+'''
+This short test script is used for verifying that the service integrates
+with the entire system
+'''
+
 if __name__ == '__main__':
 
     rpc_client = helpers.RpcClient('predictor-preprocessor')
@@ -8,5 +13,5 @@ if __name__ == '__main__':
         contents = f.read()
 
     result = rpc_client.call(contents)
-    
     print(result)
+    assert(result == 'Rensselaer')
