@@ -1,4 +1,5 @@
 import helpers
+import json
 
 '''
 This short test script is used for verifying that the service integrates
@@ -13,5 +14,6 @@ if __name__ == '__main__':
         contents = f.read()
 
     result = rpc_client.call(contents)
-    print(result)
-    assert(result == 'Rensselaer')
+    result_dict = json.loads(result)
+    assert(result_dict["colleges"][0]["ranking"] == 1)
+    assert(result_dict["colleges"][0]["name"] == "Rensselaer Polytechnic Institute")

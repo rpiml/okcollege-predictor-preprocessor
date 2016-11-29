@@ -87,7 +87,7 @@ def rabbitmq_connect(user='rabbitmq', password='rabbitmq', host='localhost'):
     print('RabbitMQ connection established')
     return connection
 
-def construct_type_dict(features_csv_bytes):
+def construct_feature_dict(features_csv_bytes):
     '''
     This function takes:
         - a csv file (as a byte array) where rows are of the format:
@@ -100,18 +100,18 @@ def construct_type_dict(features_csv_bytes):
     features_csv = io.StringIO(features_csv_bytes.decode('utf-8'))
     reader = csv.reader(features_csv, delimiter='\t')
 
-    type_dict = {}
+    feature_dict = {}
 
     for row in reader:
         try:
             categorical_count = int(row[2])
         except:
             categorical_count = None
-        type_dict[row[0]] = (row[1], categorical_count)
+        feature_dict[row[0]] = (row[1], categorical_count)
 
-    return type_dict
+    return feature_dict
 
-def construct_feature_vector(survey_response, type_dict):
+def construct_feature_vector(survey_response, feature_dict):
     '''
     This function takes:
         - a survey response (as a json object)
@@ -129,7 +129,7 @@ def construct_feature_vector(survey_response, type_dict):
     try:
         for page in survey_response['survey']['pages']:
             for question in page['questions']:
-                if question['id'] not in type_dict:
+                if question['id'] not in feature_dict:
                     continue
 
                 seen_questions.add((question['id']))
@@ -155,7 +155,7 @@ def construct_feature_vector(survey_response, type_dict):
                             response_vector.append((name, 0.))
                 else:
                     response_vector.append((question['id'], None))
-        unseen_questions = set(type_dict.keys()) - seen_questions
+        unseen_questions = set(feature_dict.keys()) - seen_questions
         for q in unseen_questions:
             response_vector.append((q, None))
     except LookupError:
@@ -164,12 +164,7 @@ def construct_feature_vector(survey_response, type_dict):
 
     return json.dumps([v[1] for v in sorted(response_vector, key=lambda x: x[0])])
 
-def on_request(ch, method, props, body):
-    '''
-    Callback to handle incoming requests to the predictor-preprocessor queue.
-    Hands off preprocessed data to the predictor and returns the response back to
-    the initial requester.
-    '''
+def get_survey_features():
     r = redis.StrictRedis(host='localhost')
     print('Attempting to fetch survey_features.csv...')
     while True:
@@ -179,26 +174,41 @@ def on_request(ch, method, props, body):
         else:
             print('survey_features.csv not found, trying again...')
             time.sleep(1)
+    return construct_feature_dict(features_csv_bytes)
 
-    print('survey_features.csv fetched')
+def get_request(response_callback):
 
-    try:
-        survey_response = json.loads(body.decode('utf-8'))
-        print('Request received, parsing...')
+    def on_request(ch, method, props, body):
+        '''
+        Callback to handle incoming requests to the predictor-preprocessor queue.
+        Hands off preprocessed data to the predictor and returns the response back to
+        the initial requester.
+        '''
+        try:
+            survey_response = json.loads(body.decode('utf-8'))
+            print('Request received, parsing...')
 
-        type_dict = construct_type_dict(features_csv_bytes)
-        feature_vector = construct_feature_vector(survey_response, type_dict)
+            feature_dict = get_survey_features()
+            feature_vector = construct_feature_vector(survey_response, feature_dict)
 
-        rpc_client = RpcClient('predictor_queue')
-        print('Requesting prediction from predictor...')
-        response = rpc_client.call(feature_vector)
-        print('Response received')
-        del rpc_client
+            rpc_client = RpcClient('predictor_queue')
+            print('Requesting prediction from predictor...')
+            response = rpc_client.call(feature_vector)
+            print('Response received')
+            del rpc_client
 
-    except:
-        print('Error: bad request %s' % str(body))
-        response = None
+        except:
+            print('Error: bad request %s' % str(body))
+            response = None
 
+        def respond(content):
+            publish_response(ch, method, props, content)
+
+        response_callback(response, respond)
+
+    return on_request
+
+def publish_response(ch, method, props, response):
     ch.basic_publish(
         exchange='',
         routing_key=props.reply_to,
