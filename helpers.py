@@ -5,6 +5,7 @@ import io
 import time
 import json
 import uuid
+import os
 
 '''
 Collection of helper functions / classes for use in the predictor-preprocessor
@@ -66,10 +67,12 @@ class RpcClient(object):
     def __del__(self):
         self.connection.close()
 
-def rabbitmq_connect(user='rabbitmq', password='rabbitmq', host='localhost'):
+def rabbitmq_connect(user='rabbitmq', password='rabbitmq', host=None):
     '''
     Connect to a rabbitmq server and wait for the connection to be established
     '''
+    if host is None:
+        host = os.getenv('RABBITMQ_HOST') or 'localhost'
     credentials = pika.PlainCredentials(user, password)
     parameters = pika.ConnectionParameters(
         host=host,
@@ -165,7 +168,7 @@ def construct_feature_vector(survey_response, feature_dict):
     return json.dumps([v[1] for v in sorted(response_vector, key=lambda x: x[0])])
 
 def get_survey_features():
-    r = redis.StrictRedis(host='localhost')
+    r = redis.StrictRedis(host=(os.getenv('REDIS_HOST') or 'localhost'))
     print('Attempting to fetch survey_features.csv...')
     while True:
         features_csv_bytes = r.get('learning:survey_features.csv')
