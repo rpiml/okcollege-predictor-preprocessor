@@ -14,6 +14,7 @@ college_index = None
 
 def on_request(prediction_response, respond):
     global college_index
+    print(prediction_response)
     try:
         selected_colleges = [college_index[int(ind)] \
                                 for ind in prediction_response.split(",")]
