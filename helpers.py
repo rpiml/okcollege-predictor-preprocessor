@@ -90,6 +90,26 @@ def rabbitmq_connect(user='rabbitmq', password='rabbitmq', host=None):
     print('RabbitMQ connection established')
     return connection
 
+def wait_for_redis(host=None):
+    '''
+    Block until the redis service is running
+    '''
+
+    if host is None:
+        host = (os.getenv('REDIS_HOST') or 'localhost')
+
+    print('Confirming redis service is running...')
+    r = redis.StrictRedis(host=(os.getenv('REDIS_HOST') or 'localhost'))
+    while True:
+        try:
+            r.ping()
+            break
+        except (redis.exceptions.ConnectionError, redis.exceptions.BusyLoadingError):
+            print('Could not connect to redis. Retrying...')
+            time.sleep(1)
+
+    print('Redis service confirmed running.')
+
 def construct_feature_dict(features_csv_bytes):
     '''
     This function takes:
