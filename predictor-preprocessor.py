@@ -44,5 +44,7 @@ if __name__ == '__main__':
     channel.basic_qos(prefetch_count=1)
     channel.basic_consume(helpers.get_request(on_request), queue='predictor-preprocessor')
 
+    helpers.wait_for_redis()
+
     print("Awaiting RPC requests...")
     channel.start_consuming()
