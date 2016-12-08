@@ -176,6 +176,8 @@ def construct_feature_vector(survey_response, feature_dict):
                             response_vector.append((name, 1.))
                         else:
                             response_vector.append((name, 0.))
+                elif question['type'] == 'text':
+                    response_vector.append((question['id'], question['answer']))
                 else:
                     response_vector.append((question['id'], None))
         unseen_questions = set(feature_dict.keys()) - seen_questions
